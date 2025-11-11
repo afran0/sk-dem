@@ -1,0 +1,223 @@
+---
+title: "SK Dem Data"
+output: github_document
+date: "2025-10-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(fixest)
+library(broom)
+library(splines)
+library(ggplot2)
+library(patchwork)
+library(modelsummary)
+library(dplyr)
+library(lfe)
+```
+
+```{r}
+#FOR LATER: fix file locat. to be generalized 
+
+load("/Users/anna/Downloads/ICPSR_38174/DS0001/38174-0001-Data.rda")
+ls()
+class(da38174.0001$CNSRVTV2)
+table(da38174.0001$CNSRVTV2, useNA = "ifany")
+
+```
+
+```{r}
+
+survey <- da38174.0001
+rm(da38174.0001)
+
+```
+
+```{r}
+names(survey)[1:50]
+
+```
+
+```{r}
+
+survey <- survey %>%
+  mutate(
+    CNSRVTV2 = as.numeric(gsub("\\D", "", as.character(CNSRVTV2))),
+    AUTHORT1 = as.numeric(gsub("\\D", "", as.character(AUTHORT1))),
+    CULTBIAS6 = as.numeric(gsub("\\D", "", as.character(CULTBIAS6))),
+    NORTHPOL = as.numeric(gsub("\\D", "", as.character(NORTHPOL))),
+    DEMTODAY = as.numeric(gsub("\\D", "", as.character(DEMTODAY))),
+    DEM10FUT = as.numeric(gsub("\\D", "", as.character(DEM10FUT))),
+    NATARMS = as.numeric(gsub("\\D", "", as.character(NATARMS))),
+    GOVDOOK = as.numeric(gsub("\\D", "", as.character(GOVDOOK))),
+    HRRESPEC = as.numeric(gsub("\\D", "", as.character(HRRESPEC)))
+  ) %>%
+  #changing var names
+  transmute(
+    year = YEAR,
+    respondent_id = CASEID,
+    national_security_law = CNSRVTV2,
+    strong_leader = AUTHORT1,
+    authority_challenge = CULTBIAS6,
+    north_policy_eval = NORTHPOL,
+    democracy_today = DEMTODAY,
+    democracy_future = DEM10FUT,
+    defense_spending = NATARMS,
+    trust_government = GOVDOOK,
+    human_rights = HRRESPEC
+  )
+
+```
+
+```{r}
+#aggregating vars
+survey_yearly <- survey %>%
+  group_by(year) %>%
+  summarise(
+    mean_natsec = mean(national_security_law, na.rm = TRUE),
+    mean_leader = mean(strong_leader, na.rm = TRUE),
+    mean_authority = mean(authority_challenge, na.rm = TRUE),
+    mean_north = mean(north_policy_eval, na.rm = TRUE),
+    mean_dem_today = mean(democracy_today, na.rm = TRUE),
+    mean_dem_future = mean(democracy_future, na.rm = TRUE),
+    mean_defense = mean(defense_spending, na.rm = TRUE),
+    mean_trust = mean(trust_government, na.rm = TRUE),
+    mean_humanrights = mean(human_rights, na.rm = TRUE)
+  )
+
+```
+
+
+```{r}
+survey_year_summary <- survey %>%
+  group_by(year) %>%
+  summarise(across(
+    c(national_security_law, strong_leader, authority_challenge,
+      north_policy_eval, democracy_today, democracy_future,
+      defense_spending, trust_government, human_rights),
+    ~ sum(!is.na(.x)),
+    .names = "n_{.col}"
+  ))
+
+survey_year_summary
+```
+
+
+```{r}
+survey %>%
+  group_by(year = year) %>%
+  summarize(mean_eval = mean(as.numeric(as.character(north_policy_eval)), na.rm = TRUE)) %>%
+  complete(year= full_seq(min(year, na.rm =TRUE):max(year, na.rm=TRUE),1)) %>%
+  ggplot(aes(x = year, y = mean_eval)) +
+  geom_line(color = "steelblue", linewidth = 1.2, na.rm=TRUE) +
+  geom_point(size = 3, na.rm = TRUE) +
+  theme_minimal() +
+  xlim(2003, 2010) +
+  ylim(2,4) +
+  labs(
+    title = "Average Evaluation of North Korea Policy Over Time",
+    x = "Year",
+    y = "Average Evaluation"
+  )
+```
+
+```{r}
+panel_subset <- survey %>%
+  filter(year %in% c(2003, 2004, 2005, 2010)) %>%
+  select(year, respondent_id, north_policy_eval, democracy_today, democracy_future)
+
+```
+
+```{r}
+# manual placeholder table, insert different one later
+
+nk_events <- tibble::tribble(
+  ~event_date, ~event_name, ~event_type,
+  as.Date("2006-10-09"), "First Nuclear Test", "nuclear_test",
+  as.Date("2009-05-25"), "Second Nuclear Test", "nuclear_test",
+  as.Date("2010-11-23"), "Yeonpyeong Shelling", "military_attack",
+  as.Date("2013-02-12"), "Third Nuclear Test", "nuclear_test",
+  as.Date("2016-01-06"), "Fourth Nuclear Test", "nuclear_test",
+  as.Date("2016-09-09"), "Fifth Nuclear Test", "nuclear_test",
+  as.Date("2017-09-03"), "Sixth Nuclear Test", "nuclear_test"
+)
+
+```
+
+```{r}
+survey_dates <- survey %>%
+  distinct(year) %>%
+  mutate(survey_date = as.Date(paste0(year, "-06-15")))
+
+```
+
+```{r}
+survey_event <- expand.grid(year = unique(survey_dates$year),
+                            event_date = nk_events$event_date) %>%
+  left_join(survey_dates, by = "year") %>%
+  left_join(nk_events, by = "event_date") %>%
+  mutate(days_since_event = as.numeric(survey_date - event_date)) %>%
+  filter(days_since_event >= 0)
+```
+
+```{r}
+
+lambda <- log(2) / 180
+
+survey_event <- survey_event %>%
+  mutate(decay_weight = exp(-lambda * days_since_event))
+
+```
+
+```{r}
+
+year_event_impact <- survey_event %>%
+  group_by(year) %>%
+  summarise(
+    total_events = n(),
+    weighted_event_intensity = sum(decay_weight, na.rm = TRUE),
+    recent_event = min(days_since_event, na.rm = TRUE)
+  )
+survey_model <- survey %>%
+  left_join(year_event_impact, by = "year")
+
+survey_model_clean <- survey_model %>%
+  filter(year %in% c(2003, 2004, 2005, 2010))
+
+```
+
+```{r}
+
+model <- felm(
+  north_policy_eval ~ weighted_event_intensity | year,
+  data = survey_model_clean
+)
+summary(model)
+
+year_summary <- survey_model_clean %>%
+  group_by(year) %>%
+  summarize(
+    mean_eval = mean(north_policy_eval, na.rm = TRUE),
+    event_intensity = mean(weighted_event_intensity, na.rm = TRUE)
+  )
+
+lm(mean_eval ~ event_intensity, data = year_summary)
+
+```
+
+```{r}
+
+
+```
+
+
+
+
+
