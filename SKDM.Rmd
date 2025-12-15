@@ -1,6 +1,6 @@
 ---
 title: "SK Dem Data"
-output: github_document
+output: pdf_document
 date: "2025-10-17"
 ---
 
@@ -21,133 +21,62 @@ library(patchwork)
 library(modelsummary)
 library(dplyr)
 library(lfe)
-```
-
-```{r}
-#FOR LATER: fix file locat. to be generalized 
-
-load("/Users/anna/Downloads/ICPSR_38174/DS0001/38174-0001-Data.rda")
-ls()
-class(da38174.0001$CNSRVTV2)
-table(da38174.0001$CNSRVTV2, useNA = "ifany")
-
-```
-
-```{r}
-
-survey <- da38174.0001
-rm(da38174.0001)
-
-```
-
-```{r}
-names(survey)[1:50]
-
-```
-
-```{r}
-
-survey <- survey %>%
-  mutate(
-    CNSRVTV2 = as.numeric(gsub("\\D", "", as.character(CNSRVTV2))),
-    AUTHORT1 = as.numeric(gsub("\\D", "", as.character(AUTHORT1))),
-    CULTBIAS6 = as.numeric(gsub("\\D", "", as.character(CULTBIAS6))),
-    NORTHPOL = as.numeric(gsub("\\D", "", as.character(NORTHPOL))),
-    DEMTODAY = as.numeric(gsub("\\D", "", as.character(DEMTODAY))),
-    DEM10FUT = as.numeric(gsub("\\D", "", as.character(DEM10FUT))),
-    NATARMS = as.numeric(gsub("\\D", "", as.character(NATARMS))),
-    GOVDOOK = as.numeric(gsub("\\D", "", as.character(GOVDOOK))),
-    HRRESPEC = as.numeric(gsub("\\D", "", as.character(HRRESPEC)))
-  ) %>%
-  #changing var names
-  transmute(
-    year = YEAR,
-    respondent_id = CASEID,
-    national_security_law = CNSRVTV2,
-    strong_leader = AUTHORT1,
-    authority_challenge = CULTBIAS6,
-    north_policy_eval = NORTHPOL,
-    democracy_today = DEMTODAY,
-    democracy_future = DEM10FUT,
-    defense_spending = NATARMS,
-    trust_government = GOVDOOK,
-    human_rights = HRRESPEC
-  )
-
-```
-
-```{r}
-#aggregating vars
-survey_yearly <- survey %>%
-  group_by(year) %>%
-  summarise(
-    mean_natsec = mean(national_security_law, na.rm = TRUE),
-    mean_leader = mean(strong_leader, na.rm = TRUE),
-    mean_authority = mean(authority_challenge, na.rm = TRUE),
-    mean_north = mean(north_policy_eval, na.rm = TRUE),
-    mean_dem_today = mean(democracy_today, na.rm = TRUE),
-    mean_dem_future = mean(democracy_future, na.rm = TRUE),
-    mean_defense = mean(defense_spending, na.rm = TRUE),
-    mean_trust = mean(trust_government, na.rm = TRUE),
-    mean_humanrights = mean(human_rights, na.rm = TRUE)
-  )
-
-```
-
-
-```{r}
-survey_year_summary <- survey %>%
-  group_by(year) %>%
-  summarise(across(
-    c(national_security_law, strong_leader, authority_challenge,
-      north_policy_eval, democracy_today, democracy_future,
-      defense_spending, trust_government, human_rights),
-    ~ sum(!is.na(.x)),
-    .names = "n_{.col}"
-  ))
-
-survey_year_summary
-```
-
-
-```{r}
-survey %>%
-  group_by(year = year) %>%
-  summarize(mean_eval = mean(as.numeric(as.character(north_policy_eval)), na.rm = TRUE)) %>%
-  complete(year= full_seq(min(year, na.rm =TRUE):max(year, na.rm=TRUE),1)) %>%
-  ggplot(aes(x = year, y = mean_eval)) +
-  geom_line(color = "steelblue", linewidth = 1.2, na.rm=TRUE) +
-  geom_point(size = 3, na.rm = TRUE) +
-  theme_minimal() +
-  xlim(2003, 2010) +
-  ylim(2,4) +
-  labs(
-    title = "Average Evaluation of North Korea Policy Over Time",
-    x = "Year",
-    y = "Average Evaluation"
-  )
-```
-
-```{r}
-panel_subset <- survey %>%
-  filter(year %in% c(2003, 2004, 2005, 2010)) %>%
-  select(year, respondent_id, north_policy_eval, democracy_today, democracy_future)
-
+library(ggrepel)
+library(vistime)
+library(vdemdata)
+library(haven)
+library(accessibility)
 ```
 
 ```{r}
 # manual placeholder table, insert different one later
 
+#add quantity variable so can use for repeats in same month of same event type
 nk_events <- tibble::tribble(
   ~event_date, ~event_name, ~event_type,
+  as.Date("1956-01-01"), "Soviet nuclear training begins", "nuclear_activity",
+  as.Date("1959-01-01"), "USSR–DPRK nuclear cooperation agreement", "nuclear_activity",
+  as.Date("1984-04-09"), "Hwasong-5 missile test", "weapons_test",
+  as.Date("1984-08-01"), "Hwasong-5 missle launch", "weapons_test",
+  as.Date("1993-05-29"), "Hwasong-6 and Hwasong-7 test-fires", "weapons_test",
+  as.Date("1998-08-31"), "Unha-1 rocket ballistic missile launch", "weapons_test",
+  as.Date("1990-12-01"), "High-explosives tests at Yongbyon", "weapons_test",
+  as.Date("2005-05-01"), "Missile fired into Sea of Japan", "military_attack",
+  as.Date("2006-03-08"), "Short-range missile tests into Sea of Japan", "weapons_test",
+  as.Date("2006-07-05"), "Taepodong-2 test-fire", "weapons_test",
+  as.Date("2007-05-25"), "Short-range missiles fired", "weapons_test",
   as.Date("2006-10-09"), "First Nuclear Test", "nuclear_test",
   as.Date("2009-05-25"), "Second Nuclear Test", "nuclear_test",
   as.Date("2010-11-23"), "Yeonpyeong Shelling", "military_attack",
   as.Date("2013-02-12"), "Third Nuclear Test", "nuclear_test",
   as.Date("2016-01-06"), "Fourth Nuclear Test", "nuclear_test",
   as.Date("2016-09-09"), "Fifth Nuclear Test", "nuclear_test",
-  as.Date("2017-09-03"), "Sixth Nuclear Test", "nuclear_test"
+  as.Date("2017-09-03"), "Sixth Nuclear Test", "nuclear_test",
+  as.Date("2020-10-10"), "ICBM Unveiled", "nuclear_activity",
+  as.Date("2022-01-05"), "Hypersonic missile test", "weapons_test",
+  as.Date("2023-03-27"), "Hwasan-31 Announcement", "nuclear_activity",
 )
+
+```
+
+```{r}
+timeline_data <- nk_events %>%
+  mutate(
+    start = event_date,
+    end = event_date,   
+    label = event_name,
+    group = event_type
+  ) %>%
+  select(label, start, end, group)
+
+
+vistime(timeline_data,
+        col.group = "group",
+        col.label = "black",
+        show_labels = FALSE,
+        rotate_labels = FALSE,
+        col.legend = "group",
+        title = "Timeline of North Korean Nuclear Program")
 
 ```
 
@@ -174,6 +103,12 @@ lambda <- log(2) / 180
 survey_event <- survey_event %>%
   mutate(decay_weight = exp(-lambda * days_since_event))
 
+linear <- decay_linear(cutoff = 50)
+#cutoff is a placeholder
+
+#make decay_weight be 0 after a set time
+
+#add d_weight_check to print out a table of values after decay weight is applied to see if it's printing out right
 ```
 
 ```{r}
@@ -214,10 +149,163 @@ lm(mean_eval ~ event_intensity, data = year_summary)
 
 ```{r}
 
+vdem_kor <- vdem %>%
+  filter(country_id == 42)
 
+vdem_rok <- vdem_kor %>%
+  filter(histname == "Republic of Korea")
+
+vdem_rok_dem <- vdem_rok %>%
+  select(
+    year,
+    v2x_polyarchy,
+    v2x_libdem,
+    v2x_partipdem, 
+    v2x_delibdem,  
+    v2x_rule,   
+    v2x_jucon,      
+    v2xlg_legcon,        
+    v2x_civlib, 
+    v2x_clphy,
+    v2x_freexp_altinf 
+  )
+
+vdem_rok_dem
 ```
 
 
+```{r}
 
+vdem_long <- vdem_rok_dem %>%
+  pivot_longer(
+    cols = c(
+      v2x_polyarchy,
+      v2x_libdem,
+      v2x_partipdem,
+      v2x_delibdem
+    ),
+    names_to = "index",
+    values_to = "value"
+  )
+
+```
+
+```{r}
+ggplot(vdem_long, aes(x = year, y = value, color = index)) +
+  geom_line(linewidth = 1.1) +
+  theme_minimal() +
+  labs(
+    title = "Democracy Indices in South Korea",
+    x = "Year",
+    y = "Index Value (0–1)",
+    color = "Index"
+  )
+
+```
+
+```{r}
+vdem_rights <- vdem_rok_dem %>%
+  select(
+    year,
+    v2x_rule,
+    v2x_civlib,
+    v2x_freexp_altinf
+  ) %>%
+  pivot_longer(-year, names_to = "index", values_to = "value")
+
+ggplot(vdem_rights, aes(year, value, color = index)) +
+  geom_line(linewidth = 1.2) +
+  theme_minimal() +
+  labs(
+    title = "Rule of Law and Civil Liberties in South Korea",
+    x = "Year",
+    y = "Index Value (0–1)",
+    color = ""
+  )
+
+```
+
+```{r}
+nk_years <- nk_events %>%
+  mutate(year = lubridate::year(event_date)) %>%
+  filter(year %in% vdem_rok_dem$year)
+
+ggplot(vdem_rok_dem, aes(x = year, y = v2x_libdem)) +
+  geom_line(linewidth = 1.2, color = "steelblue") +
+  geom_vline(
+    data = nk_years,
+    aes(xintercept = year),
+    linetype = "dashed",
+    alpha = 0.5
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Liberal Democracy in South Korea and North Korean Events",
+    x = "Year",
+    y = "Liberal Democracy Index (0–1)"
+  )
+
+```
+```{r}
+nk_events_year <- nk_events %>%
+  filter(!is.na(event_date)) %>%
+  mutate(year = year(event_date))
+
+nk_yearly <- nk_events_year %>%
+  group_by(year) %>%
+  summarise(
+    n_events = n(),
+    n_nuclear = sum(event_type == "nuclear_test"),
+    n_weapons = sum(event_type == "weapons_test"),
+    n_attacks = sum(event_type == "military_attack")
+  )
+
+vdem_macro <- vdem_rok_dem %>%
+  left_join(nk_yearly, by = "year")
+
+vdem_macro <- vdem_macro %>%
+  mutate(
+    n_events = replace_na(n_events, 0)
+  )
+
+```
+
+```{r}
+
+# NO SCALED EVENTS 
+
+ggplot(vdem_macro, aes(x = n_events, y = v2x_libdem)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_minimal() +
+  labs(
+    title = "North Korean Security Events and Liberal Democracy",
+    x = "Number of NK Events (Year)",
+    y = "Liberal Democracy Index"
+  )
+
+```
+Without taking intensity into consideration, liberal democracy tends to increase. Possibly has some relation with South Korea's rapid industrialization and democratization periods? Think about cutting off pre-2000s data.
+
+```{r}
+vdem_compare <- vdem_rok_dem %>%
+  select(
+    year,
+    v2x_polyarchy,
+    v2x_libdem,
+    v2x_rule
+  ) %>%
+  pivot_longer(-year, names_to = "index", values_to = "value")
+
+ggplot(vdem_compare, aes(year, value, color = index)) +
+  geom_line(linewidth = 1.2) +
+  theme_minimal() +
+  labs(
+    title = "Electoral Democracy vs Liberal Constraints in South Korea",
+    x = "Year",
+    y = "Index (0–1)"
+  )
+
+```
 
 
